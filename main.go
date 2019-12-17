@@ -5,8 +5,8 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"encoding/json"
-	"io/ioutil"
 	"os"
+	"sync"
 )
 
 func main() {}
@@ -19,46 +19,52 @@ func LoadFromFile(path string, e interface{}) error {
 		return err
 	}
 	defer f.Close()
-
-	b, err := ioutil.ReadAll(f)
-	if err != nil {
+	if err = gob.NewDecoder(f).Decode(e); err != nil {
 		return err
 	}
-
-	buf := bytes.NewBuffer(b)
-	if err = gob.NewDecoder(buf).Decode(e); err != nil {
-		return err
-	}
-
 	return nil
+}
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return &bytes.Buffer{}
+	},
+}
+
+func GetBuffer() *bytes.Buffer {
+	return bufferPool.Get().(*bytes.Buffer)
+}
+
+func PutBuffer(buf *bytes.Buffer) {
+	buf.Reset()
+	bufferPool.Put(buf)
 }
 
 // SaveToFile はeでjsonのMarshalを行い、gzip圧縮したデータをpathに保存する
 // チューニング対象
 func SaveToFile(path string, e interface{}) error {
-	f, err := os.Create(path)
+	buf := GetBuffer()
+	defer PutBuffer(buf)
+
+	gw, err := gzip.NewWriterLevel(buf, gzip.BestSpeed)
 	if err != nil {
 		return err
 	}
-
-	defer f.Close()
-
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-
-	buf := bytes.Buffer{}
-	gw := gzip.NewWriter(&buf)
 	defer gw.Close()
 
-	if _, err = gw.Write(b); err != nil {
+	if err = json.NewEncoder(gw).Encode(e); err != nil {
 		return err
 	}
 
 	if err = gw.Flush(); err != nil {
 		return err
 	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
 	if _, err = f.Write(buf.Bytes()); err != nil {
 		return err
@@ -71,22 +77,22 @@ func SaveToFile(path string, e interface{}) error {
 // 参考 https://www.codeflow.site/ja/article/java-merge-sort
 // チューニング対象
 func MergeSort(list []int) {
+	mergeSort(list, make([]int, len(list)))
+}
+
+func mergeSort(list []int, sub []int) {
 	l := len(list)
 	if l > 1 {
 		m := l / 2
-		n := l - m
-		sub1 := make([]int, m)
-		sub2 := make([]int, n)
+		sub1 := sub[0:m]
+		sub2 := sub[m:]
 
-		for i := 0; i < m; i++ {
-			sub1[i] = list[i]
-		}
-		for i := 0; i < n; i++ {
-			sub2[i] = list[i+m]
-		}
+		mergeSort(list[0:m], sub1)
+		mergeSort(list[m:], sub2)
 
-		MergeSort(sub1)
-		MergeSort(sub2)
+		copy(sub1, list[0:m])
+		copy(sub2, list[m:])
+
 		merge(sub1, sub2, list)
 	}
 }
